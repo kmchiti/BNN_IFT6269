@@ -60,7 +60,7 @@ def butter_lowpass_filter(data, cutoff, fs, order, nyq):
     y = filtfilt(b, a, data)
     return y
 
-def prep_data_regression(path_data='/content/SolarPrediction.csv'):
+def prep_data_regression(path_data):
     data = pd.read_csv(path_data)
     y = np.array(data['Radiation'])
     x = np.arange(len(y))
@@ -112,7 +112,7 @@ def prep_data_classification():
 
 
 
-def data_loader(classification):
+def data_loader(classification, path_data='/content/SolarPrediction.csv'):
     if(classification):
         # train config
         NTrainPointsMNIST = 60000
@@ -122,7 +122,7 @@ def data_loader(classification):
         valloader = torch.utils.data.DataLoader(valset, batch_size=batch_size, shuffle=False, pin_memory=True)
 
     else:
-        x_train, y_train, x_test, y_test = prep_data_regression()
+        x_train, y_train, x_test, y_test = prep_data_regression(path_data)
         x_train = torch.tensor(x_train).float()
         y_train = torch.tensor(y_train).float()
         x_test = torch.tensor(x_test).float()
@@ -185,28 +185,6 @@ def test_SGLD(x, target, nets):
 
     return H_list, H_mean, H_var, pred_list, acc, variation_ratio
 
-def test_MC(x, target, test_iter, net):
-    pred_list = []
-    H_list = []
-    for i in range(test_iter):
-        pred = net.network.forward(x.float().cuda())
-        #pred = F.softmax(pred, dim=1).data
-        pred_list.append(pred)
-        H_list.append(entropy(pred.cpu().data.numpy(), axis=1))
-
-    pred_list = torch.stack(pred_list)
-    pred_mean = pred_list.mean(dim=0)
-    H_mean = entropy(pred_mean.cpu().data.numpy(), axis=1)
-    H_var = np.std(H_list, axis=0)
-
-    pred_label_list = torch.argmax(pred_list, dim=2)
-    acc = torch.sum(pred_label_list==target)/pred_label_list.shape[0]
-    acc = acc.cpu().data.numpy()
-    c_ = torch.mode(pred_label_list, dim=0)
-    variation_ratio = 1 - torch.sum(pred_label_list==c_.values[0]*torch.ones_like(pred_label_list))/pred_label_list.shape[0]
-    variation_ratio = variation_ratio.cpu().data.numpy()
-
-    return H_list, H_mean, H_var, pred_list, acc, variation_ratio
 
 def plot_Uncertainty(x, target, nets, err_type_):
     degress = np.linspace(0,150, 20)
@@ -255,13 +233,16 @@ def plot_Uncertainty(x, target, nets, err_type_):
     ax.fill_between(input_list, H_mean_list[:,0]-H_var_list[:,0], H_mean_list[:,0]+H_var_list[:,0], alpha=0.3, color='#1f77b4')
 
     ax2 = ax.twinx()
-    ax2.set_ylabel('predictive accuracy', color='#ff7f0e')
+    ax2.set_ylabel('predictive accuracy', color='#ff7f0e')  # we already handled the x-label with ax1
     ax2.tick_params(axis='y', labelcolor='#ff7f0e')
     lns2 = ax2.plot(input_list, softmax_means, label="softmaxt", color='#ff7f0e')
     ax2.fill_between(input_list, softmax_means-softmax_vars, softmax_means+softmax_vars, alpha=0.3, color='#ff7f0e')
     ax2.grid(None)
 
+    #ax.plot(input_list, variation_ratio_list, color='#9467bd', label="variation ratio") 
+
     ax.tick_params(axis='x', which='major', pad=26)
+    # added these three lines
     lns = lns1+lns2
     labs = [l.get_label() for l in lns]
     ax.legend(lns, labs, loc=0)
@@ -305,105 +286,3 @@ def plot_Uncertainty_Regression(valloader, trainloader, nets):
     #plt.axvline(x=x_new[158], color='gray', alpha=0.7, linestyle='--')
     plt.legend(loc='lower left')
     plt.savefig("Regresion_SGLD.pdf", bbox_inches='tight')
-
-
-
-def plot_Uncertainty_drop(x, target, test_iter, net, err_type_):
-    degress = np.linspace(0,150, 20)
-    noise_list = np.linspace(0,2, 20)
-    if(err_type_=="noise"):
-        input_list = noise_list
-    elif(err_type_=="rotate"):
-        input_list = degress
-    H_mean_list = []
-    H_var_list = []
-    acc_list = []
-    variation_ratio_list = []
-    x_new_list = []
-    softmax_means = []
-    softmax_vars = []
-    for noise in tqdm(input_list):
-        if(err_type_=="noise"):
-            x_new = torch.rand_like(x)*noise + x
-        elif(err_type_=="rotate"):
-            x_new = torchvision.transforms.functional.rotate(x, noise)
-        x_new_list.append(x_new)
-        _, H_mean, H_var, pred_list, acc, variation_ratio = test_MC(x_new, target, test_iter, net)
-        H_mean_list.append(H_mean)
-        H_var_list.append(H_var)
-        acc_list.append(acc)
-        variation_ratio_list.append(variation_ratio)
-        softmax_means.append(torch.mean(pred_list[:,0,target], dim=0).cpu().data.numpy())
-        softmax_vars.append(torch.std(pred_list[:,0,target], dim=0).cpu().data.numpy())
-
-    H_mean_list = np.array(H_mean_list)
-    H_var_list = np.array(H_var_list)
-    softmax_means = np.array(softmax_means)
-    softmax_vars = np.array(softmax_vars)
-    
-    fig, ax = plt.subplots()
-    fig.set_figheight(5)
-    fig.set_figwidth(7)
-    ax.set_title("MC DropOut", fontweight="bold")
-    if(err_type_ == "noise"):
-        ax.set_xlabel("noise")
-    elif(err_type_ == "rotate"):
-        ax.set_xlabel("rotation degree")
-    ax.set_ylabel("nat", color='#1f77b4')
-    ax.tick_params(axis='y', labelcolor='#1f77b4')
-    lns1 = ax.plot(input_list, H_mean_list, color='#1f77b4', label="Entropy")
-    ax.fill_between(input_list, H_mean_list[:,0]-H_var_list[:,0], H_mean_list[:,0]+H_var_list[:,0], alpha=0.3, color='#1f77b4')
-
-    ax2 = ax.twinx()
-    ax2.set_ylabel('predictive accuracy', color='#ff7f0e')
-    ax2.tick_params(axis='y', labelcolor='#ff7f0e')
-    lns2 = ax2.plot(input_list, softmax_means, label="softmaxt", color='#ff7f0e')
-    ax2.fill_between(input_list, softmax_means-softmax_vars, softmax_means+softmax_vars, alpha=0.3, color='#ff7f0e')
-    ax2.grid(None)
-
-    ax.tick_params(axis='x', which='major', pad=26)
-    lns = lns1+lns2
-    labs = [l.get_label() for l in lns]
-    ax.legend(lns, labs, loc=0)
-
-    for i, c in enumerate(input_list):
-        if(i%(len(input_list)//5) == 0 or i==len(input_list)-1):
-          offset_image(c, c, ax, x_new_list[i])
-
-    if(err_type_=="noise"):
-        plt.savefig("Entropy_noise_DropOut.pdf", bbox_inches='tight')
-    elif(err_type_=="rotate"):
-        plt.savefig("Entropy_rotate_DropOut.pdf", bbox_inches='tight')
-
-
-def plot_Uncertainty_Regression_drop(valloader, trainloader, net):
-    x_test, y_test = valloader.dataset.tensors
-    x_train, y_train = trainloader.dataset.tensors
-    x_test = x_test[:,0]
-    y_test = y_test[:,0]
-    x_train = x_train[:,0]
-    y_train = y_train[:,0]
-    samples = []
-    noises = []
-    for i in range(100):
-        preds = net.network.forward(torch.tensor(x_test).float().cuda()).cpu().data.numpy()
-        samples.append(preds)
-        
-    samples = np.array(samples)
-    means = (samples.mean(axis = 0)).reshape(-1)
-    var = (samples.std(axis = 0)).reshape(-1)
-
-    plt.figure(figsize=(10,4))
-    plt.plot(x_test, y_test, label='true function', color='black', alpha=0.7) #2ca02c
-    plt.fill_between(x_test, means-var, means+var, alpha=0.3, label='$\pm 2 \sigma$', color='#1f77b4')
-    plt.plot(x_train, y_train, '*', color='#ff7f0e', label='train data', alpha=0.4)
-    plt.plot(x_test, means, label='mean', color='#1f77b4') #1f77b4
-    plt.title("MC Dropout")
-    #plt.axvline(x=x_new[72], color='gray', alpha=0.7, linestyle='--')
-    #plt.axvline(x=x_new[90], color='gray', alpha=0.7, linestyle='--')
-    #plt.axvline(x=x_new[143], color='gray', alpha=0.7, linestyle='--')
-    #plt.axvline(x=x_new[158], color='gray', alpha=0.7, linestyle='--')
-    plt.legend(loc='lower left')
-    plt.savefig("Regresion_Drop.pdf", bbox_inches='tight')
-    
-
